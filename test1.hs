@@ -3,7 +3,7 @@ import Data.List.Split
 import Control.Monad.Trans.State.Strict
 import Pipes
 import Control.Exception
-import Control.Monad (forever,replicateM)
+import Control.Monad (forever,replicateM, when, unless)
 import System.IO
 import  System.Random
 import Data.Map.Strict
@@ -138,80 +138,45 @@ pipe window len producer = runEffect $ producer >-> P.take len >-> doStuff windo
 -- pipe 10 30 $ each $ cycle [1,2,3]
 --
 
-wordCount :: Pipe ([Char],Bool) (Map [Char] Integer) IO ()
-wordCount = flip evalStateT empty $ forever $
-                    do
-                        (x, ok) <- lift await
-                        m <- get
-                        case ok of
-                            True -> 
-                                if member x m
-                                    then put $ adjust (+1) x m
-                                    else put $ insert x 1 m
-                            _ -> (lift . yield) m
-                        (lift . yield) m
-
-
-tokenize = flip evalStateT [] $ forever $
-            do
-                x <- lift await
-                s <- get
-                if x == ' '
-                    then put []
-                    else put $ s ++ [x]
-                s' <- get
-                (lift . yield) (s', x==' ')
-
-
-tokenize' = go []
+tokenize = go []
     where 
         go x = do
-            a <- await
-            if a == ' '
-                then do
-                        yield x
-                        go []
-                else
-                    go $ x ++ [a]
+            c <- await
+            case c of
+                Nothing -> yield Nothing
+                Just a ->  if a == ' ' || a == '\n'
+                        then do
+                            yield $ Just x
+                            go []
+                    else
+                        go $ x ++ [a]
 
-wordCount'' = go empty
+wordCount = go empty
     where
         go m = do
             x <- await
-            if x=="END"
-                then yield m
-                else 
-                    if member x m
-                        then go $ adjust (+1) x m
-                        else go $ insert x 1 m
+            case x of 
+                Nothing -> yield m
+                Just x' -> if member x' m
+                                then go $ adjust (+1) x' m
+                                else go $ insert x' 1 m
 
 
-wordCount' :: Pipe [Char] (Map [Char] Integer) IO ()
-wordCount' = flip evalStateT empty $ forever $
-                    do
-                        x <- lift await
-                        m <- get
-                        if member x m
-                            then put $ adjust (+1) x m
-                            else put $ insert x 1 m
-                        (lift . yield) m
 
+readChars handle = do
+                    y <- (lift . hIsEOF) handle 
+                    case y of
+                        False -> do
+                            x <- (lift . hGetChar) handle
+                            yield $ Just x
+                            readChars handle
+                        True -> yield Nothing
 
-readChars handle = forever $ do
-                    x <- (lift . hGetChar) handle
-                    yield x
-
-main = withFile "dmesg.txt" ReadMode $  (\file ->  runEffect $  readChars file>-> 
+main = withFile "dmesg.txt" ReadMode $  (\file ->  
+                    runEffect $
+                    readChars file >-> 
                     tokenize >->
-                    P.take 100 >->
                     wordCount >->
-                    P.map show >-> 
-                    P.stdoutLn)
-
-
-main' = withFile "dmesg.txt" ReadMode $  (\file ->  runEffect $  readChars file>-> 
-                    tokenize' >->
-                    wordCount'' >->
-                    P.map show >-> 
+                    P.map show >->
                     P.stdoutLn)
 
